@@ -22,6 +22,7 @@ from unicore.logging import meters, metrics
 from unicore.nan_detector import NanDetector
 from unicore.optim import lr_scheduler
 from unicore.ema import ExponentialMovingAverageModel
+from IPython import embed
 
 
 logger = logging.getLogger(__name__)

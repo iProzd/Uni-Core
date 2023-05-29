@@ -7,6 +7,7 @@
 """
 Train a new model on one or across multiple GPUs.
 """
+from IPython import embed
 
 import argparse
 import logging
@@ -28,6 +29,7 @@ from unicore.distributed import utils as distributed_utils
 from unicore.logging import meters, metrics, progress_bar
 from unicore.trainer import Trainer
 from multiprocessing.pool import ThreadPool
+import wandb as wb
 
 
 logging.basicConfig(
@@ -101,6 +103,14 @@ def main(args) -> None:
         )
     )
 
+    # add wandb
+    wb.init(
+        project="DPA",
+        entity="dp_model_engineering",
+        name='test_1',
+        settings=wb.Settings(start_method="fork"),
+    )
+
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
     extra_state, epoch_itr = checkpoint_utils.load_checkpoint(
@@ -113,6 +123,7 @@ def main(args) -> None:
     lr = trainer.get_lr()
     train_meter = meters.StopwatchMeter()
     train_meter.start()
+    global_step = 0
     while epoch_itr.next_epoch_idx <= max_epoch:
         if lr <= args.stop_min_lr:
             logger.info(
@@ -123,7 +134,7 @@ def main(args) -> None:
             break
 
         # train for one epoch
-        valid_losses, should_stop = train(args, trainer, task, epoch_itr, ckp_copy_thread)
+        valid_losses, should_stop, global_step = train(args, trainer, task, epoch_itr, ckp_copy_thread, global_step)
         if should_stop:
             break
 
@@ -174,10 +185,11 @@ def should_stop_early(args, valid_loss: float) -> bool:
 
 @metrics.aggregate("train")
 def train(
-    args, trainer: Trainer, task: tasks.UnicoreTask, epoch_itr, ckp_copy_thread
-) -> Tuple[List[Optional[float]], bool]:
+    args, trainer: Trainer, task: tasks.UnicoreTask, epoch_itr, ckp_copy_thread, global_step=0
+) -> Tuple[List[Optional[float]], bool, int]:
     """Train the model for one epoch and return validation losses."""
     # Initialize data iterator
+    iter_start = global_step
     itr = epoch_itr.next_epoch_itr(
         fix_batches_to_gpus=args.fix_batches_to_gpus,
         shuffle=(epoch_itr.next_epoch_idx > args.curriculum),
@@ -210,26 +222,38 @@ def train(
     max_update = args.max_update or math.inf
 
     for i, samples in enumerate(progress):
+        # print('herre: unicore cli/train:214')
+        # embed()
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
             log_output = trainer.train_step(samples)
+            # print('log_output: unicore cli/train:220')
+            # embed()
 
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats
             num_updates = trainer.get_num_updates()
             if num_updates % args.log_interval == 0:
+            # if True:
                 stats = get_training_stats(metrics.get_smoothed_values("train_inner"))
                 progress.log(stats, tag="train_inner", step=num_updates)
+                wb.log({'mae_e_trn': stats['loss'],
+                        'mae_f_trn': stats['node_loss']}, step=iter_start)
 
                 # reset mid-epoch stats after each log interval
                 # the end-of-epoch stats will still be preserved
                 metrics.reset_meters("train_inner")
+                # print('log_output: unicore cli/train:233')
+                # embed()
 
         end_of_epoch = not itr.has_next()
         valid_losses, should_stop = validate_and_save(
             args, trainer, task, epoch_itr, valid_subsets, end_of_epoch, ckp_copy_thread
         )
+        # print('valid: unicore cli/train:238')
+        # embed()
+        iter_start += 1
 
         if should_stop:
             break
@@ -241,7 +265,7 @@ def train(
 
     # reset epoch-level meters
     metrics.reset_meters("train")
-    return valid_losses, should_stop
+    return valid_losses, should_stop, iter_start
 
 
 def validate_and_save(

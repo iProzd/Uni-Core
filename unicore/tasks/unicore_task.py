@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List
 import torch
 from unicore import metrics, utils
 from unicore.data import UnicoreDataset, data_utils, iterators
+from IPython import embed
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,8 @@ class UnicoreTask(object):
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
             optimizer.backward(loss)
+        # print('return loss: unicore_task.py 285')
+        # embed()
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, loss, test=False):
